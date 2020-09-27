@@ -21,8 +21,10 @@
  	xpos .byte
  	ypos .byte
  	type .byte
- 	spritetile .byte
+ 	animationIndex .byte
  	direction .byte
+ 	coverDirection .byte
+ 	bools .byte
 .endstruct
 
 .segment "STARTUP"
@@ -34,11 +36,11 @@
 	entities: .res .sizeof(Entity) * MAXENTITIES
 	TOTALENTITIES = .sizeof(Entity) * MAXENTITIES
 	spritemem: .res 2
-	abtnLatch: .res 1
 	bulletOffset: .res 1
 	temp: .res 1
 	tempX: .res 1
 	tempY: .res 1
+	frameTick: .res 1
 .segment "CODE"
 
 WAITFORVBLANK:
@@ -82,7 +84,9 @@ CLEARMEM:
 	LDA #EntityType::PlayerEntity
 	STA entities+Entity::type ;set as player
 	LDA #$00
-	STA entities+Entity::spritetile
+	STA entities+Entity::animationIndex,x
+	STA entities+Entity::bools,x
+	STA entities+Entity::coverDirection,x
 	LDA #$01
 	STA entities+Entity::direction
 
@@ -95,22 +99,26 @@ CLEARMEM:
 	STA entities+Entity::ypos,x ;set enemy pos y
 	LDA #EntityType::Enemy
 	STA entities+Entity::type,x ;set as enemy
-	LDA #$04
-	STA entities+Entity::spritetile,x
+	LDA #$00
+	STA entities+Entity::animationIndex,x
+	STA entities+Entity::bools,x
+	STA entities+Entity::coverDirection,x
 	LDA #$01
 	STA entities+Entity::direction,x
 
 
 	LDX #.sizeof(Entity) *2
-	LDA #$FF
 
 CLEARENTITIES:
+	LDA #$FF
 	STA entities+Entity::xpos, x
 	STA entities+Entity::ypos, x
 	LDA #$00
 	STA entities+Entity::type,x
-	STA entities+Entity::spritetile,x
+	STA entities+Entity::animationIndex,x
 	STA entities+Entity::direction,x	
+	STA entities+Entity::bools,x
+	STA entities+Entity::coverDirection,x
 	TXA
 	CLC
 	ADC #.sizeof(Entity)
@@ -201,6 +209,17 @@ Loop:
 
 GameLoop:
 	LDX #$00
+	LDA frameTick
+	CLC
+	ADC #$01
+	CMP #$3C
+	BEQ RESETFRAMETICK
+	STA frameTick
+	JMP UPDATEENTITIES
+
+RESETFRAMETICK:
+	LDA #$00
+	STA frameTick
 
 UPDATEENTITIES:
 	LDA entities+Entity::type,x
@@ -214,6 +233,64 @@ BULLETUPDATE:
 	JMP BULLETUPDATESTART
 
 PlayerUpdate:
+	LDA entities+Entity::bools
+	AND #%00000010
+	CMP #%00000010
+	BEQ SETPLAYERCROUCHING
+	JMP SETPLAYERSTANDING
+
+SETPLAYERCROUCHING:
+
+	LDA entities+Entity::direction
+	AND #%00000100
+	BNE SETPLAYERCROUCHAIMDOWN
+
+	LDA entities+Entity::direction
+	AND #%00001000
+	BNE SETPLAYERCROUCHAIMUP
+
+	LDA #$24
+	STA entities+Entity::animationIndex
+	JMP PLAYERCOLLISIONLOOP
+
+SETPLAYERCROUCHAIMUP:
+	LDA #$2C
+	STA entities+Entity::animationIndex
+	JMP PLAYERCOLLISIONLOOP
+
+SETPLAYERCROUCHAIMDOWN:
+	LDA #$28
+	STA entities+Entity::animationIndex
+	JMP PLAYERCOLLISIONLOOP
+
+
+SETPLAYERSTANDING:
+	LDA entities+Entity::direction
+	AND #%00000100
+	BNE SETPLAYERAIMDOWN
+
+	LDA entities+Entity::direction
+	AND #%00001000
+	BNE SETPLAYERAIMUP
+
+	LDA #$00
+	STA entities+Entity::animationIndex
+	JMP PLAYERCOLLISIONLOOP
+
+SETPLAYERAIMUP:
+	LDA #$08
+	STA entities+Entity::animationIndex
+	JMP PLAYERCOLLISIONLOOP
+
+SETPLAYERAIMDOWN:
+	LDA #$04
+	STA entities+Entity::animationIndex
+	JMP PLAYERCOLLISIONLOOP
+
+PLAYERCOLLISIONLOOP:
+	
+
+
 	LDA entities+Entity::direction
 	AND #%00001111
 	STA entities+Entity::direction
@@ -226,8 +303,8 @@ TopLeft:
 	STA temp
 	JSR Player_WorldCollision
 	LDA temp
-	CMP #$01
-	BEQ HitTopLeft
+	CMP #$00
+	BNE HitTopLeft
 TopRight:
 	LDA entities+Entity::xpos
 	CLC
@@ -239,8 +316,8 @@ TopRight:
 	STA temp
 	JSR Player_WorldCollision
 	LDA temp
-	CMP #$01
-	BEQ HitTopRight
+	CMP #$00
+	BNE HitTopRight
 BotLeft:
 	LDA entities+Entity::xpos
 	STA tempX
@@ -252,8 +329,8 @@ BotLeft:
 	STA temp
 	JSR Player_WorldCollision
 	LDA temp
-	CMP #$01
-	BEQ HitBotLeft
+	CMP #$00
+	BNE HitBotLeft
 BotRight:
 	LDA entities+Entity::xpos
 	CLC
@@ -267,8 +344,8 @@ BotRight:
 	STA temp
 	JSR Player_WorldCollision
 	LDA temp
-	CMP #$01
-	BEQ HitBotRight
+	CMP #$00
+	BNE HitBotRight
 	JMP ResolveCollision
 
 
@@ -313,6 +390,26 @@ ResolveColVertical:
 	BNE ResolveDown
 
 ExitResolve:
+
+	;Figure out if we moved and didnt collide this frame to exit coverDirection
+	LDA entities+Entity::direction
+	AND #%11110000
+	BEQ DidPlayerCollide
+	JMP NextEntity
+
+DidPlayerCollide:
+	LDA ControllerInput
+	AND #%00001111
+	BEQ ENDPLAYERUPDATE
+	JMP DidPlayerMove
+
+DidPlayerMove:
+	LDA entities+Entity::bools
+	AND #%11111101
+	STA entities+Entity::bools
+	JMP NextEntity
+
+ENDPLAYERUPDATE:
 	JMP NextEntity
 
 ResolveLeft:	
@@ -333,13 +430,13 @@ ResolveUp:
   SEC 
   SBC #$01
   STA entities+Entity::ypos
-  JMP ExitResolve
+  JMP NextEntity
 ResolveDown:	
   LDA entities+Entity::ypos
   CLC 
   ADC #$01
   STA entities+Entity::ypos
-  JMP ExitResolve
+  JMP NextEntity
 
 
 Player_WorldCollision:	
@@ -362,8 +459,10 @@ Player_WorldCollision:
 	LSR
 	TAY
 	LDA (world), y
+	CMP #$24
+	BEQ WallHit
 	CMP #$00
-	BNE WallHit
+	BNE CoverHit
 	RTS
 
 WallHit:
@@ -371,10 +470,22 @@ WallHit:
 	STA temp
 	RTS
 
+CoverHit:
+	LDA entities+Entity::bools
+	ORA #%00000010
+	STA entities+Entity::bools
+	LDA #$02
+	STA temp
+	RTS
+
 DESTROYENTITY:	
 	LDA #$00
-	STA entities+Entity::spritetile,x
+	STA entities+Entity::animationIndex,x
 	STA entities+Entity::type,x
+	STA entities+Entity::direction,x
+	STA entities+Entity::animationIndex,x
+	STA entities+Entity::coverDirection,x
+	STA entities+Entity::bools,x
 	LDA #$FF
 	STA entities+Entity::xpos, x
 	STA entities+Entity::ypos, x	
@@ -436,7 +547,7 @@ ContinueBulletLoop:
 	CLC
 	ADC #.sizeof(Entity)
 	TAY 
-	CPY #MAXENTITIES
+	CPY #TOTALENTITIES
 	BEQ Bullet_WorldCollision
 	JMP BulletCheckLoop
 
@@ -466,8 +577,8 @@ Bullet_WorldCollision:
 
 	;get the tile from the map
 	LDA (world), y
-	CMP #$00
-	BNE BulletHitWall
+	CMP #$24
+	BEQ BulletHitWall
 	JMP NextEntity
 
 BulletHitWall:
@@ -476,8 +587,8 @@ BulletHitWall:
 
 BulletHitEntity:
 
-	LDA #$00
-	STA entities+Entity::spritetile,y
+	LDA #$00 ;;destroy the entity we hit
+	STA entities+Entity::animationIndex,y
 	STA entities+Entity::type,y
 	LDA #$FF
 	STA entities+Entity::xpos,y
@@ -548,11 +659,11 @@ VBLANK:
 DrawEntities:
 	LDA entities+Entity::type, X
 	CMP #EntityType::PlayerEntity
-	BEQ PLAYERSPRITE
+	BEQ DRAWPLAYERSPRITE
 	CMP #EntityType::Enemy
-	BEQ PLAYERSPRITE
+	BEQ DRAWPLAYERSPRITE
 	CMP #EntityType::Bullet
-	BEQ PLAYERSPRITE
+	BEQ BULLETSPRITE
 	JMP CHEKENDSPRITE
 
 
@@ -560,8 +671,8 @@ DrawEntities:
 BULLETSPRITE:	
 	LDA entities+Entity::ypos, x
 	STA (spritemem),y
-	INY
-	LDA entities+Entity::spritetile,x
+	INY	
+	LDA #$0C
 	STA (spritemem),y
 	INY
 	LDA #$00; Pallet
@@ -572,11 +683,23 @@ BULLETSPRITE:
 	INY
 	jmp CHEKENDSPRITE
 
-PLAYERSPRITE:
+DRAWPLAYERSPRITE:
+
+SWAPPLAYERSPRITEDIRECTION:
+	LDA entities+Entity::bools,x
+	AND #%00000001
+	BEQ PLAYERRIGHT
+	JMP PLAYERLEFT
+
+PLAYERRIGHT:
 	LDA entities+Entity::ypos, x
 	STA (spritemem),y
-	INY
-	LDA entities+Entity::spritetile,x
+	INY	
+	TYA
+	STA temp
+	LDY entities+Entity::animationIndex,x
+	LDA PlayerFrames,y
+	LDY temp
 	STA (spritemem),y
 	INY
 	LDA #$00; Pallet
@@ -589,9 +712,12 @@ PLAYERSPRITE:
 	LDA entities+Entity::ypos, x
 	STA (spritemem),y
 	INY
-	LDA entities+Entity::spritetile,x
-	CLC
-	ADC #$01
+	TYA
+	STA temp	
+	LDY entities+Entity::animationIndex,x
+	INY
+	LDA PlayerFrames,y
+	LDY temp
 	STA (spritemem),y
 	INY
 	LDA #$00; Pallet
@@ -607,10 +733,14 @@ PLAYERSPRITE:
 	CLC
 	ADC #$08
 	STA (spritemem),y
+	INY	
+	TYA
+	STA temp	
+	LDY entities+Entity::animationIndex,x
 	INY
-	LDA entities+Entity::spritetile,x
-	CLC
-	ADC #$02
+	INY
+	LDA PlayerFrames,y
+	LDY temp
 	STA (spritemem),y
 	INY
 	LDA #$00; Pallet
@@ -624,10 +754,16 @@ PLAYERSPRITE:
 	CLC
 	ADC #$08
 	STA (spritemem),y
+	INY	
+	TYA
+	STA temp	
+	LDY entities+Entity::animationIndex,x
 	INY
-	LDA entities+Entity::spritetile,x
-	CLC
-	ADC #$03
+	INY
+	INY
+	LDA PlayerFrames,y
+
+	LDY temp
 	STA (spritemem),y
 	INY
 	LDA #$00; Pallet
@@ -638,7 +774,89 @@ PLAYERSPRITE:
 	ADC #$08
 	STA (spritemem),y
 	INY
+	JMP CHEKENDSPRITE
+PLAYERLEFT:
+	LDA entities+Entity::ypos, x
+	STA (spritemem),y
+	INY	
+	TYA
+	STA temp
+	LDY entities+Entity::animationIndex,x
+	INY
+	LDA PlayerFrames,y
+	LDY temp
+	STA (spritemem),y
+	INY
+	LDA #%01000000; Pallet
+	STA (spritemem),y 
+	INY
+	LDA entities+Entity::xpos, x
+	STA (spritemem),y
+	INY
 
+	LDA entities+Entity::ypos, x
+	STA (spritemem),y
+	INY	
+	TYA
+	STA temp
+	LDY entities+Entity::animationIndex,x
+	LDA PlayerFrames,y
+	LDY temp
+	STA (spritemem),y
+	INY
+	LDA #%01000000; Pallet
+	STA (spritemem),y 
+	INY
+	LDA entities+Entity::xpos, x
+	CLC
+	ADC #$08
+	STA (spritemem),y
+	INY
+
+	LDA entities+Entity::ypos, x
+	CLC
+	ADC #$08
+	STA (spritemem),y
+	INY	
+	TYA
+	STA temp
+	LDY entities+Entity::animationIndex,x
+	INY
+	INY
+	INY
+	LDA PlayerFrames,y
+	LDY temp
+	STA (spritemem),y
+	INY
+	LDA #%01000000; Pallet
+	STA (spritemem),y 
+	INY
+	LDA entities+Entity::xpos, x
+	STA (spritemem),y
+	INY
+
+	LDA entities+Entity::ypos, x
+	CLC
+	ADC #$08
+	STA (spritemem),y
+	INY	
+	TYA
+	STA temp
+	LDY entities+Entity::animationIndex,x
+	INY
+	INY
+	LDA PlayerFrames,y
+	LDY temp
+	STA (spritemem),y
+	INY
+	LDA #%01000000; Pallet
+	STA (spritemem),y 
+	INY
+	LDA entities+Entity::xpos, x
+	CLC
+	ADC #$08
+	STA (spritemem),y
+	INY
 
 
 CHEKENDSPRITE:
@@ -679,19 +897,19 @@ InitSpriteLoop:
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;Input
 
 ReadController:
-  LDA #$01
-  STA $4016
-  LDA #$00
-  STA $4016
-  LDX #$08
+	LDA #$01
+	STA $4016
+	LDA #$00
+	STA $4016
+	LDX #$08
 
 
 ReadControllerLoop:
-  LDA $4016
-  LSR A           
-  ROL ControllerInput 
-  DEX
-  BNE ReadControllerLoop
+	LDA $4016
+	LSR A           
+	ROL ControllerInput 
+	DEX
+	BNE ReadControllerLoop
 
 InputHandling: 
 	LDA ControllerInput
@@ -704,66 +922,79 @@ SetDirection:
 	STA entities+Entity::direction
 
 ABTN:
-  LDA ControllerInput
-  AND #%10000000  
-  BEQ ABTNUP  
+	LDA ControllerInput
+	AND #%10000000  
+	BEQ MoveLeft  
 
-  LDA abtnLatch
-  CMP #$01
-  BEQ MoveLeft
-
-  LDA #$01
-  STA abtnLatch
-
-  BNE SPAWNBULLET
-
-ABTNUP:
-  LDA #$00
-  STA abtnLatch 
+	LDA entities+Entity::bools
+	AND #%11111101
+	STA entities+Entity::bools
+	JMP SPAWNBULLET
 
 MoveLeft:
-  LDA ControllerInput
-  AND #%00000001  
-  BEQ MoveRight
-  
-  LDA entities+Entity::xpos
-  CLC
-  ADC #$01
-  STA entities+Entity::xpos
+	LDA ControllerInput
+	AND #%00000001  
+	BEQ MoveRight
+
+
+	LDA entities+Entity::bools
+	ORA #%00000001
+	STA entities+Entity::bools
+
+	LDA entities+Entity::xpos
+	CLC
+	ADC #$01
+	STA entities+Entity::xpos
 
 MoveRight:
-  LDA ControllerInput
-  AND #%00000010  
-  BEQ MoveUp
+	LDA ControllerInput
+	AND #%00000010  
+	BEQ MoveUp
 
-  LDA entities+Entity::xpos
-  SEC 
-  SBC #$01
-  STA entities+Entity::xpos
+	LDA entities+Entity::bools
+	AND #%11111110
+	STA entities+Entity::bools
+
+	LDA entities+Entity::xpos
+	SEC 
+	SBC #$01
+	STA entities+Entity::xpos
 
 MoveUp:
-  LDA ControllerInput
-  AND #%00000100  
-  BEQ MoveDown
+	LDA ControllerInput
+	AND #%00000100  
+	BEQ MoveDown
 
-  LDA entities+Entity::ypos
-  CLC
-  ADC #$01
-  STA entities+Entity::ypos
+	LDA entities+Entity::ypos
+	CLC
+	ADC #$01
+	STA entities+Entity::ypos
 
 MoveDown:
-  LDA ControllerInput
-  AND #%00001000  
-  BEQ ReadInputDone
-
-  LDA entities+Entity::ypos
-  SEC 
-  SBC #$01
-  STA entities+Entity::ypos   
-  JMP ReadInputDone
+	LDA ControllerInput
+	AND #%00001000  
+	BEQ ReadInputDone
+	LDA entities+Entity::ypos
+	SEC 
+	SBC #$01
+	STA entities+Entity::ypos   
+	JMP ReadInputDone
 
 SPAWNBULLET:
+	
 	LDX #$00
+
+	LDA frameTick
+	CMP #$00
+	BEQ EntitySpawnLoop
+	CMP #$10
+	BEQ EntitySpawnLoop
+	CMP #$20
+	BEQ EntitySpawnLoop
+	CMP #$30
+	BEQ EntitySpawnLoop
+	JMP MoveLeft
+
 EntitySpawnLoop:
 	CPX #TOTALENTITIES-.sizeof(Entity)
 	BEQ ReadInputDone
@@ -784,8 +1015,6 @@ ADDBULLET:
 	CLC
 	ADC bulletOffset
 	STA entities+Entity::ypos,x
- 	
-
 	INC bulletOffset
 	INC bulletOffset
 	LDA bulletOffset
@@ -801,9 +1030,6 @@ ADDBULLET:
 EndBullet:
 	LDA #EntityType::Bullet
 	STA entities+Entity::type,x
-	LDA #$08
-	STA entities+Entity::spritetile,x
-
 	LDA entities+Entity::direction
 	STA entities+Entity::direction,x
 
@@ -817,6 +1043,25 @@ ReadInputDone:
 JSR GameLoop
 
 RTI
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+PlayerFrames:
+	.byte  $00, $01, $02, $03 ;Stading Mid 0
+	.byte  $04, $05, $06, $07 ;Stading Dwn 4
+	.byte  $08, $09, $0A, $0B ;Stading UP 8
+
+	.byte  $00, $01, $12, $13 ;W1 Mid 12
+	.byte  $04, $05, $16, $17 ;W1 Dwn 16
+	.byte  $08, $09, $1A, $1B ;W1 UP 20
+
+	.byte  $00, $01, $22, $23 ;W2 Mid 24
+	.byte  $04, $05, $26, $27 ;W2 Dwn 28
+	.byte  $08, $09, $2A, $2B ;W2 UP 32
+
+	.byte  $10, $11, $20, $21 ;Cover Mid 36
+	.byte  $14, $15, $24, $25 ;Cover Dwn 40
+	.byte  $18, $19, $28, $29 ;Cover UP 44
 
 
 
