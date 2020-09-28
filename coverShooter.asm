@@ -21,6 +21,7 @@
  	xpos .byte
  	ypos .byte
  	type .byte
+ 	health .byte
  	animationIndex .byte
  	direction .byte
  	coverDirection .byte
@@ -89,6 +90,8 @@ CLEARMEM:
 	STA entities+Entity::coverDirection,x
 	LDA #$01
 	STA entities+Entity::direction
+	LDA #$0C	
+	STA entities+Entity::health,x
 
 
 	LDX #.sizeof(Entity)
@@ -105,6 +108,8 @@ CLEARMEM:
 	STA entities+Entity::coverDirection,x
 	LDA #$01
 	STA entities+Entity::direction,x
+	LDA #$08	
+	STA entities+Entity::health,x
 
 
 	LDX #.sizeof(Entity) *2
@@ -118,6 +123,7 @@ CLEARENTITIES:
 	STA entities+Entity::animationIndex,x
 	STA entities+Entity::direction,x	
 	STA entities+Entity::bools,x
+	STA entities+Entity::health,x
 	STA entities+Entity::coverDirection,x
 	TXA
 	CLC
@@ -301,7 +307,8 @@ TopLeft:
 	STA tempY
 	LDA #$00
 	STA temp
-	JSR Player_WorldCollision
+	JSR WorldCollision
+	JSR PlayerCoverCollision
 	LDA temp
 	CMP #$00
 	BNE HitTopLeft
@@ -314,7 +321,8 @@ TopRight:
 	STA tempY
 	LDA #$00
 	STA temp
-	JSR Player_WorldCollision
+	JSR WorldCollision
+	JSR PlayerCoverCollision
 	LDA temp
 	CMP #$00
 	BNE HitTopRight
@@ -327,7 +335,8 @@ BotLeft:
 	STA tempY
 	LDA #$00
 	STA temp
-	JSR Player_WorldCollision
+	JSR WorldCollision
+	JSR PlayerCoverCollision
 	LDA temp
 	CMP #$00
 	BNE HitBotLeft
@@ -342,7 +351,8 @@ BotRight:
 	STA tempY
 	LDA #$00
 	STA temp
-	JSR Player_WorldCollision
+	JSR WorldCollision
+	JSR PlayerCoverCollision
 	LDA temp
 	CMP #$00
 	BNE HitBotRight
@@ -397,6 +407,16 @@ ExitResolve:
 	BEQ DidPlayerCollide
 	JMP NextEntity
 
+PlayerCoverCollision:
+	LDA temp
+	CMP #$02
+	BNE EndPlayerCoverCollision
+	LDA entities+Entity::bools
+	ORA #%00000010
+	STA entities+Entity::bools
+EndPlayerCoverCollision:
+	RTS
+
 DidPlayerCollide:
 	LDA ControllerInput
 	AND #%00001111
@@ -424,7 +444,6 @@ ResolveRight:
   ADC #$01
   STA entities+Entity::xpos
   JMP ResolveColVertical
-
 ResolveUp:	
   LDA entities+Entity::ypos
   SEC 
@@ -439,7 +458,7 @@ ResolveDown:
   JMP NextEntity
 
 
-Player_WorldCollision:	
+WorldCollision:	
 	lda tempY
  	AND #%11111000
 	ASL
@@ -471,12 +490,25 @@ WallHit:
 	RTS
 
 CoverHit:
-	LDA entities+Entity::bools
-	ORA #%00000010
-	STA entities+Entity::bools
 	LDA #$02
 	STA temp
 	RTS
+
+
+
+DESTROYTARGETENTITY:	
+	LDA #$00
+	STA entities+Entity::animationIndex,y
+	STA entities+Entity::type,y
+	STA entities+Entity::direction,y
+	STA entities+Entity::animationIndex,y
+	STA entities+Entity::coverDirection,y
+	STA entities+Entity::health,y
+	STA entities+Entity::bools,y
+	LDA #$FF
+	STA entities+Entity::xpos,y
+	STA entities+Entity::ypos,y	
+	jmp NextEntity
 
 DESTROYENTITY:	
 	LDA #$00
@@ -485,6 +517,7 @@ DESTROYENTITY:
 	STA entities+Entity::direction,x
 	STA entities+Entity::animationIndex,x
 	STA entities+Entity::coverDirection,x
+	STA entities+Entity::health,x
 	STA entities+Entity::bools,x
 	LDA #$FF
 	STA entities+Entity::xpos, x
@@ -552,49 +585,28 @@ ContinueBulletLoop:
 	JMP BulletCheckLoop
 
 Bullet_WorldCollision:	
-	;get Y coordinate in pixels and keep only the relevant bits
-	lda entities+Entity::ypos, x
- 	AND #%11111000
-	;multiply the Y coordinate by 4 (the equivalent of dividing by 8 and then multiplying by 32) and add it to the base address of the map
-	ASL
-	ROL world+1
-	ASL
-	ROL world+1
-	CLC
-	ADC #<WorldData
-	STA world+0
-	LDA world+1
-	AND #%00000011
-	ADC #>WorldData
-	STA world+1
-
-	;divide X coordinate by 8 to get the index
-	LDA entities+Entity::xpos, x
-	LSR
-	LSR
-	LSR
-	TAY
-
-	;get the tile from the map
-	LDA (world), y
-	CMP #$24
-	BEQ BulletHitWall
-	JMP NextEntity
-
-BulletHitWall:
+	LDA entities+Entity::xpos,x
+	STA tempX
+	LDA entities+Entity::ypos,x
+	STA tempY
+	LDA #$00
+	STA temp
+	JSR WorldCollision
+	LDA temp
+	CMP #$01
+	BNE NextEntity
 	JMP DESTROYENTITY
-
 
 BulletHitEntity:
-
-	LDA #$00 ;;destroy the entity we hit
-	STA entities+Entity::animationIndex,y
-	STA entities+Entity::type,y
-	LDA #$FF
-	STA entities+Entity::xpos,y
-	STA entities+Entity::ypos,y	
+	LDA entities+Entity::health,y
+	SEC
+	SBC #$01
+	STA entities+Entity::health,y
+	BEQ EnemyKilled
 	JMP DESTROYENTITY
 
+EnemyKilled:
+	JMP DESTROYTARGETENTITY
 
 EntityCollisionCheck:
 CheckXLow:
@@ -661,7 +673,7 @@ DrawEntities:
 	CMP #EntityType::PlayerEntity
 	BEQ DRAWPLAYERSPRITE
 	CMP #EntityType::Enemy
-	BEQ DRAWPLAYERSPRITE
+	BEQ DRAWENEMYSPRITE
 	CMP #EntityType::Bullet
 	BEQ BULLETSPRITE
 	JMP CHEKENDSPRITE
@@ -684,6 +696,14 @@ BULLETSPRITE:
 	jmp CHEKENDSPRITE
 
 DRAWPLAYERSPRITE:
+	LDA #$00 
+	STA tempY
+	JMP SWAPPLAYERSPRITEDIRECTION
+
+DRAWENEMYSPRITE:
+	LDA #$01
+	STA tempY
+	JMP SWAPPLAYERSPRITEDIRECTION
 
 SWAPPLAYERSPRITEDIRECTION:
 	LDA entities+Entity::bools,x
@@ -702,7 +722,7 @@ PLAYERRIGHT:
 	LDY temp
 	STA (spritemem),y
 	INY
-	LDA #$00; Pallet
+	LDA tempY; Pallet
 	STA (spritemem),y 
 	INY
 	LDA entities+Entity::xpos, x
@@ -720,7 +740,7 @@ PLAYERRIGHT:
 	LDY temp
 	STA (spritemem),y
 	INY
-	LDA #$00; Pallet
+	LDA tempY;Pallet
 	STA (spritemem),y 
 	INY
 	LDA entities+Entity::xpos, x
@@ -743,7 +763,7 @@ PLAYERRIGHT:
 	LDY temp
 	STA (spritemem),y
 	INY
-	LDA #$00; Pallet
+	LDA tempY; Pallet
 	STA (spritemem),y 
 	INY
 	LDA entities+Entity::xpos, x
@@ -766,7 +786,7 @@ PLAYERRIGHT:
 	LDY temp
 	STA (spritemem),y
 	INY
-	LDA #$00; Pallet
+	LDA tempY; Pallet
 	STA (spritemem),y 
 	INY
 	LDA entities+Entity::xpos, x
@@ -787,7 +807,8 @@ PLAYERLEFT:
 	LDY temp
 	STA (spritemem),y
 	INY
-	LDA #%01000000; Pallet
+	LDA tempY; Pallet
+	ORA #%01000000
 	STA (spritemem),y 
 	INY
 	LDA entities+Entity::xpos, x
@@ -804,7 +825,8 @@ PLAYERLEFT:
 	LDY temp
 	STA (spritemem),y
 	INY
-	LDA #%01000000; Pallet
+	LDA tempY; Pallet
+	ORA #%01000000
 	STA (spritemem),y 
 	INY
 	LDA entities+Entity::xpos, x
@@ -828,7 +850,8 @@ PLAYERLEFT:
 	LDY temp
 	STA (spritemem),y
 	INY
-	LDA #%01000000; Pallet
+	LDA tempY; Pallet
+	ORA #%01000000
 	STA (spritemem),y 
 	INY
 	LDA entities+Entity::xpos, x
@@ -849,7 +872,8 @@ PLAYERLEFT:
 	LDY temp
 	STA (spritemem),y
 	INY
-	LDA #%01000000; Pallet
+	LDA tempY; Pallet
+	ORA #%01000000
 	STA (spritemem),y 
 	INY
 	LDA entities+Entity::xpos, x
