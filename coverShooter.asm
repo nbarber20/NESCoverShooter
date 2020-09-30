@@ -3,7 +3,7 @@
 	.byte $1a
 	.byte $02; 2* 16kb prg rom
 	.byte $01; 1 * 8kb chr rom
-	.byte %00000001; mapper and mirroring
+	.byte %0000011; mapper and mirroring
 	.byte $00
 	.byte $00
 	.byte $00
@@ -32,6 +32,7 @@
 
 .segment "ZEROPAGE"
 	world: .res 2
+	scrollOffset: .res 1
 	ControllerInput: .res 1
 	MAXENTITIES = 20
 	entities: .res .sizeof(Entity) * MAXENTITIES
@@ -147,7 +148,6 @@ CLEARENTITIES:
 	STA $2006
 
 	LDX #$00
-
 LoadPalettes:
     LDA PALETTEDATA, X
     STA $2007
@@ -208,12 +208,16 @@ SetAttributes:
     STA $2001
 
 
+    LDA #$08
+    STA scrollOffset
+
 Loop:
 	JMP Loop
 
 
 
 GameLoop:
+	
 	LDX #$00
 	LDA frameTick
 	CLC
@@ -243,6 +247,9 @@ PlayerUpdate:
 	AND #%00000010
 	CMP #%00000010
 	BEQ SETPLAYERCROUCHING
+	LDA ControllerInput
+	AND #%00001111
+	BNE SETPLAYERWALKING
 	JMP SETPLAYERSTANDING
 
 SETPLAYERCROUCHING:
@@ -273,23 +280,68 @@ SETPLAYERCROUCHAIMDOWN:
 SETPLAYERSTANDING:
 	LDA entities+Entity::direction
 	AND #%00000100
-	BNE SETPLAYERAIMDOWN
+	BNE SETPLAYERAIMDOWNSTANDING
 
 	LDA entities+Entity::direction
 	AND #%00001000
-	BNE SETPLAYERAIMUP
+	BNE SETPLAYERAIMUPSTANDING
 
 	LDA #$00
 	STA entities+Entity::animationIndex
 	JMP PLAYERCOLLISIONLOOP
 
-SETPLAYERAIMUP:
+SETPLAYERAIMUPSTANDING:
 	LDA #$08
 	STA entities+Entity::animationIndex
 	JMP PLAYERCOLLISIONLOOP
 
-SETPLAYERAIMDOWN:
+SETPLAYERAIMDOWNSTANDING:
 	LDA #$04
+	STA entities+Entity::animationIndex
+	JMP PLAYERCOLLISIONLOOP
+
+SETPLAYERWALKING:
+	LDA entities+Entity::direction
+	AND #%00000100
+	BNE SETPLAYERAIMUPWALKING
+
+	LDA entities+Entity::direction
+	AND #%00001000
+	BNE SETPLAYERAIMDOWNWALKING
+
+	LDA frameTick
+	CMP #$1E
+	BCC :+
+	LDA #$0C
+	STA entities+Entity::animationIndex
+	JMP PLAYERCOLLISIONLOOP
+:
+	LDA #$18
+	STA entities+Entity::animationIndex
+	JMP PLAYERCOLLISIONLOOP
+
+SETPLAYERAIMUPWALKING:
+	LDA frameTick
+	CMP #$1E
+	BCC :+
+
+	LDA #$10
+	STA entities+Entity::animationIndex
+	JMP PLAYERCOLLISIONLOOP
+:
+	LDA #$1C
+	STA entities+Entity::animationIndex
+	JMP PLAYERCOLLISIONLOOP
+SETPLAYERAIMDOWNWALKING:
+	LDA frameTick
+	CMP #$1E
+	BCC :+
+
+	LDA #$14
+	STA entities+Entity::animationIndex
+	JMP PLAYERCOLLISIONLOOP
+:
+	LDA #$20
 	STA entities+Entity::animationIndex
 	JMP PLAYERCOLLISIONLOOP
 
@@ -1063,6 +1115,11 @@ EndBullet:
 
 
 ReadInputDone:
+BIT $2002
+LDA #$00
+STA $2005
+LDA scrollOffset
+STA $2005
 
 JSR GameLoop
 
